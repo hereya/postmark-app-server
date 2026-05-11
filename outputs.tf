@@ -19,9 +19,22 @@ output "postmarkFromEmail" {
 # sensitive defensively, but they are PUBLIC DNS records by nature --
 # the user must publish them in their DNS zone. nonsensitive() unwraps
 # them so they appear in `tofu output` and `hereya env`.
+#
+# When provisionDomain=false (subsequent workspaces sharing the same
+# Postmark account), the domain resource has count=0, so accessing
+# index [0] would error at apply time. The locals + try() pattern
+# below returns "" in that case — the user already has the DNS records
+# from the first workspace's apply.
+
+locals {
+  dkim_host  = try(nonsensitive(postmark_domain.domain[0].dkim_pending_host), "")
+  dkim_value = try(nonsensitive(postmark_domain.domain[0].dkim_pending_text_value), "")
+  rp_host    = try(nonsensitive(postmark_domain.domain[0].return_path_domain), "")
+  rp_value   = try(nonsensitive(postmark_domain.domain[0].return_path_domain_cname_value), "")
+}
 
 output "dnsRecordDkimHost" {
-  value = nonsensitive(postmark_domain.domain.dkim_pending_host)
+  value = local.dkim_host
 }
 
 output "dnsRecordDkimType" {
@@ -29,11 +42,11 @@ output "dnsRecordDkimType" {
 }
 
 output "dnsRecordDkimValue" {
-  value = nonsensitive(postmark_domain.domain.dkim_pending_text_value)
+  value = local.dkim_value
 }
 
 output "dnsRecordReturnPathHost" {
-  value = nonsensitive(postmark_domain.domain.return_path_domain)
+  value = local.rp_host
 }
 
 output "dnsRecordReturnPathType" {
@@ -41,20 +54,16 @@ output "dnsRecordReturnPathType" {
 }
 
 output "dnsRecordReturnPathValue" {
-  value = nonsensitive(postmark_domain.domain.return_path_domain_cname_value)
+  value = local.rp_value
 }
 
 output "dnsRecordsPostmark" {
-  value = jsonencode([
-    {
-      name  = nonsensitive(postmark_domain.domain.dkim_pending_host)
-      type  = "TXT"
-      value = nonsensitive(postmark_domain.domain.dkim_pending_text_value)
-    },
-    {
-      name  = nonsensitive(postmark_domain.domain.return_path_domain)
-      type  = "CNAME"
-      value = nonsensitive(postmark_domain.domain.return_path_domain_cname_value)
-    }
-  ])
+  value = jsonencode(
+    var.provisionDomain
+      ? [
+          { name = local.dkim_host, type = "TXT",   value = local.dkim_value },
+          { name = local.rp_host,   type = "CNAME", value = local.rp_value },
+        ]
+      : []
+  )
 }

@@ -37,18 +37,22 @@ resource "postmark_server" "server" {
 }
 
 resource "postmark_domain" "domain" {
+  # Conditional: only the FIRST workspace per Postmark account creates this.
+  # Subsequent workspaces sharing the same account set provisionDomain=false
+  # because Postmark domains are account-scoped (one per account, total),
+  # not workspace-scoped — trying to "create" an already-existing one
+  # triggers an inconsistent-state error in shebang-labs/postmark v0.2.4.
+  count = var.provisionDomain ? 1 : 0
+
   name = var.domain
 
-  # `shebang-labs/postmark` v0.2.4 has a known bug where subsequent applies
-  # against an already-verified domain return inconsistent state (the
-  # provider's refresh/update path produces "Root object was present, but
-  # now absent" because the computed DKIM/verification attributes diverge
-  # from what Create returned).
-  #
-  # Once the domain is registered the first time, its identity is stable
-  # (the `name`) — there's nothing meaningful for Tofu to reconcile. Tell
-  # it to leave the resource alone after creation. The dnsRecord* outputs
-  # were captured on first apply and don't change unless DNS records do.
+  # Even on the workspace that DOES own the domain, `shebang-labs/postmark`
+  # v0.2.4 has a refresh bug: on subsequent applies the computed DKIM /
+  # verification attributes diverge from what Create returned, and the
+  # provider's refresh path reports "Root object was present, but now
+  # absent". Once the domain is registered the first time its identity
+  # is stable (the `name`), so we tell Tofu not to reconcile it. The
+  # dnsRecord* outputs were captured on first apply and don't change.
   lifecycle {
     ignore_changes = all
   }
