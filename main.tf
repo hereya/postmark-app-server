@@ -1,9 +1,11 @@
 terraform {
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+
     random = {
       source  = "hashicorp/random"
       version = "~> 3.5"
@@ -23,12 +25,79 @@ provider "postmark" {
 
 data "aws_region" "current" {}
 
+# Route 53 hosted zone lookup — only when we're in auto-subdomain mode.
+# The workspace exposes `defaultRootDomain` (e.g. "example.com") and we
+# look up the zone id by name. Public zones only; if the user runs Route
+# 53 private zones they should pin var.domain and manage DNS themselves.
+data "aws_route53_zone" "root" {
+  count        = local.manage_dns_in_route53 ? 1 : 0
+  name         = var.defaultRootDomain
+  private_zone = false
+}
+
 locals {
-  resolved_from_email = var.fromEmail != "" ? var.fromEmail : "auth@${var.domain}"
+  # In auto-subdomain mode, if the user didn't pin var.subdomainName, fall
+  # back to a random_pet — keeps multiple workspaces sharing one root
+  # domain from colliding on a hardcoded label. The random value is keyed
+  # on var.defaultRootDomain so it stays stable across applies for a
+  # given workspace.
+  effective_subdomain = (
+    var.subdomainName != ""
+      ? var.subdomainName
+      : random_pet.subdomain.id
+  )
+
+  # Effective domain — see variables.tf for the two modes:
+  #   external DNS  (var.domain set)
+  #   auto-subdomain on Route 53 (var.domain empty, defaultRootDomain from workspace)
+  effective_domain = (
+    var.domain != ""
+      ? var.domain
+      : (
+        var.defaultRootDomain != ""
+          ? "${local.effective_subdomain}.${var.defaultRootDomain}"
+          : ""
+      )
+  )
+
+  # When the user did not pin var.domain AND a root domain is available
+  # (workspace exposed one), the package automates DNS in Route 53 by
+  # discovering the hosted zone via data.aws_route53_zone.
+  manage_dns_in_route53 = var.domain == "" && var.defaultRootDomain != ""
+
+  resolved_from_email = (
+    var.fromEmail != ""
+      ? var.fromEmail
+      : "auth@${local.effective_domain}"
+  )
+}
+
+# Validation: at least one of the two modes must be fully configured.
+# Triggers a clear plan-time error rather than letting Postmark see "".
+check "domain_configured" {
+  assert {
+    condition     = local.effective_domain != ""
+    error_message = "Set either var.domain (external DNS) OR var.defaultRootDomain (auto-subdomain on Route 53). var.subdomainName is optional in the latter — leave empty to auto-generate."
+  }
 }
 
 resource "random_pet" "server_suffix" {
   length = 4
+}
+
+# Random subdomain prefix used when the user does not pin var.subdomainName
+# in auto-subdomain mode. Two-word pet name (e.g. "happy-otter") keeps the
+# label short, DNS-safe, and reasonably unique.
+#
+# The keeper ties the random value to var.defaultRootDomain so the same
+# workspace gets the same subdomain across applies. Changing the root
+# domain (or destroying + recreating) regenerates a fresh subdomain.
+resource "random_pet" "subdomain" {
+  length    = 2
+  separator = "-"
+  keepers = {
+    root_domain = var.defaultRootDomain
+  }
 }
 
 resource "postmark_server" "server" {
@@ -37,19 +106,67 @@ resource "postmark_server" "server" {
 }
 
 resource "postmark_domain" "domain" {
-  # Keyed on var.domain (rather than `count`) so a change to var.domain
-  # changes the resource's ADDRESS in state — old key is dropped, new
-  # key is added. Tofu's only path through this is destroy+create, which
-  # uses the provider's Delete + Create methods (both of which actually
-  # talk to the Postmark API). shebang-labs/postmark v0.2.4's Update is
-  # a silent no-op — we route around it entirely.
+  # Keyed on effective_domain so a domain change rewrites the address in
+  # state (forcing destroy+create rather than the provider's broken
+  # in-place Update). See README.
   #
-  # Conditional: only the FIRST workspace per Postmark account creates
-  # this. Subsequent workspaces sharing the same account set
-  # provisionDomain=false because Postmark domains are account-scoped.
-  for_each = var.provisionDomain ? toset([var.domain]) : toset([])
+  # provisionDomain=false skips the resource entirely — for workspaces
+  # sharing one Postmark account where the domain has already been
+  # registered by another workspace.
+  for_each = var.provisionDomain ? toset([local.effective_domain]) : toset([])
 
   name = each.key
+}
+
+# ---------------------------------------------------------------------------
+# Route 53 records — only when the package is BOTH owning the registration
+# AND the workspace provided a hosted zone.
+#
+# Two records:
+#   • DKIM TXT at <selector>._domainkey.<effective_domain>
+#   • Return-path CNAME at pm-bounces.<effective_domain> -> pm.mtasv.net
+#
+# The DKIM TTL is 300s so the user can iterate quickly if they have to
+# (Postmark's verification poll cycle is also ~5min). Return-path is set
+# from the provider's value with a fallback to Postmark's well-known
+# default ("pm.mtasv.net") since shebang-labs/postmark v0.2.4's
+# return_path_domain_cname_value is sometimes empty on Read.
+# ---------------------------------------------------------------------------
+
+resource "aws_route53_record" "postmark_dkim" {
+  for_each = (
+    local.manage_dns_in_route53 && var.provisionDomain
+      ? toset([local.effective_domain])
+      : toset([])
+  )
+
+  zone_id = data.aws_route53_zone.root[0].zone_id
+  name    = nonsensitive(postmark_domain.domain[each.key].dkim_pending_host)
+  type    = "TXT"
+  ttl     = 300
+  records = [nonsensitive(postmark_domain.domain[each.key].dkim_pending_text_value)]
+}
+
+resource "aws_route53_record" "postmark_return_path" {
+  for_each = (
+    local.manage_dns_in_route53 && var.provisionDomain
+      ? toset([local.effective_domain])
+      : toset([])
+  )
+
+  zone_id = data.aws_route53_zone.root[0].zone_id
+  name    = "pm-bounces.${local.effective_domain}"
+  type    = "CNAME"
+  ttl     = 300
+  records = [
+    coalesce(
+      try(
+        nonsensitive(postmark_domain.domain[each.key].return_path_domain_cname_value),
+        null,
+      ),
+      "pm.mtasv.net",
+    )
+  ]
 }
 
 resource "aws_ssm_parameter" "postmark_server_key" {
