@@ -45,17 +45,6 @@ resource "postmark_domain" "domain" {
   count = var.provisionDomain ? 1 : 0
 
   name = var.domain
-
-  # Even on the workspace that DOES own the domain, `shebang-labs/postmark`
-  # v0.2.4 has a refresh bug: on subsequent applies the computed DKIM /
-  # verification attributes diverge from what Create returned, and the
-  # provider's refresh path reports "Root object was present, but now
-  # absent". Once the domain is registered the first time its identity
-  # is stable (the `name`), so we tell Tofu not to reconcile it. The
-  # dnsRecord* outputs were captured on first apply and don't change.
-  lifecycle {
-    ignore_changes = all
-  }
 }
 
 resource "aws_ssm_parameter" "postmark_server_key" {
