@@ -38,6 +38,20 @@ resource "postmark_server" "server" {
 
 resource "postmark_domain" "domain" {
   name = var.domain
+
+  # `shebang-labs/postmark` v0.2.4 has a known bug where subsequent applies
+  # against an already-verified domain return inconsistent state (the
+  # provider's refresh/update path produces "Root object was present, but
+  # now absent" because the computed DKIM/verification attributes diverge
+  # from what Create returned).
+  #
+  # Once the domain is registered the first time, its identity is stable
+  # (the `name`) — there's nothing meaningful for Tofu to reconcile. Tell
+  # it to leave the resource alone after creation. The dnsRecord* outputs
+  # were captured on first apply and don't change unless DNS records do.
+  lifecycle {
+    ignore_changes = all
+  }
 }
 
 resource "aws_ssm_parameter" "postmark_server_key" {
