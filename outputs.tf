@@ -27,15 +27,29 @@ output "postmarkFromEmail" {
 # from the first workspace's apply.
 
 locals {
-  # postmark_domain.domain is now `for_each`-keyed on var.domain (so a
-  # domain change forces an address change → destroy+create instead of
-  # the broken in-place Update). The collection's only element is at
-  # key var.domain; if provisionDomain=false the map is empty and try()
-  # returns the empty-string fallback.
-  dkim_host  = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_host), "")
-  dkim_value = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_text_value), "")
-  rp_host    = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain), "")
-  rp_value   = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain_cname_value), "")
+  # postmark_domain.domain is `for_each`-keyed on var.domain (so a domain
+  # change forces an address change → destroy+create, sidestepping the
+  # provider's broken in-place Update). The collection's only element
+  # is at key var.domain; if provisionDomain=false the map is empty and
+  # try() returns the empty-string fallback.
+  _dkim_host_raw  = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_host), "")
+  _dkim_value_raw = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_text_value), "")
+  _rp_host_raw    = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain), "")
+  _rp_value_raw   = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain_cname_value), "")
+
+  # shebang-labs/postmark returns `dkim_pending_host` as a full FQDN
+  # but `return_path_domain` as just the relative prefix (e.g.
+  # "pm-bounces"). Normalize the return-path to an FQDN so both DNS
+  # records can be copied straight into a DNS provider's UI without
+  # the user having to remember which is relative-vs-absolute.
+  dkim_host  = local._dkim_host_raw
+  dkim_value = local._dkim_value_raw
+  rp_value   = local._rp_value_raw
+  rp_host = local._rp_host_raw == "" ? "" : (
+    endswith(local._rp_host_raw, var.domain)
+      ? local._rp_host_raw
+      : "${local._rp_host_raw}.${var.domain}"
+  )
 }
 
 output "dnsRecordDkimHost" {
