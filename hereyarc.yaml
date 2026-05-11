@@ -1,5 +1,5 @@
 name: hereya/postmark-app-server
-version: 0.2.2
+version: 0.2.3
 description: Provisions a per-app Postmark server (unique name) and verifies a domain for sending. DNS records exposed as outputs for external configuration.
 iac: terraform
 infra: aws

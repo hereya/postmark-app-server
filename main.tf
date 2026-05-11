@@ -155,6 +155,21 @@ resource "aws_route53_record" "postmark_dkim" {
   type    = "TXT"
   ttl     = 300
   records = [nonsensitive(postmark_domain.domain[0].dkim_pending_text_value)]
+
+  # After Postmark verifies the DKIM record (via the verifyDkim trigger
+  # below), it clears dkim_pending_host and dkim_pending_text_value on
+  # the provider's next refresh. shebang-labs/postmark v0.2.4 doesn't
+  # expose the post-verification "active" DKIM slot, so subsequent reads
+  # see empty strings and would try to write `records = [""]` — which
+  # Route 53 rejects with "Invalid XML; ResourceRecord is not complete".
+  #
+  # Pin the record after creation: the DKIM TXT must remain present in
+  # DNS for Postmark to keep delivering mail, and the value never
+  # legitimately changes until the user manually rotates the key in
+  # the Postmark UI. If they do rotate, taint this record + re-apply.
+  lifecycle {
+    ignore_changes = [name, records]
+  }
 }
 
 resource "aws_route53_record" "postmark_return_path" {
