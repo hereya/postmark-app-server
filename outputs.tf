@@ -28,9 +28,14 @@ output "iamPolicyPostmark" {
 }
 
 # --- DNS records (all dnsRecord* prefixed -- user-actionable) ---
+#
+# The Postmark provider marks the DKIM and return-path attributes as
+# sensitive defensively, but they are PUBLIC DNS records by nature --
+# the user must publish them in their DNS zone. nonsensitive() unwraps
+# them so they appear in `tofu output` and `hereya env`.
 
 output "dnsRecordDkimHost" {
-  value = postmark_domain.domain.dkim_pending_host
+  value = nonsensitive(postmark_domain.domain.dkim_pending_host)
 }
 
 output "dnsRecordDkimType" {
@@ -38,11 +43,11 @@ output "dnsRecordDkimType" {
 }
 
 output "dnsRecordDkimValue" {
-  value = postmark_domain.domain.dkim_pending_text_value
+  value = nonsensitive(postmark_domain.domain.dkim_pending_text_value)
 }
 
 output "dnsRecordReturnPathHost" {
-  value = postmark_domain.domain.return_path_domain
+  value = nonsensitive(postmark_domain.domain.return_path_domain)
 }
 
 output "dnsRecordReturnPathType" {
@@ -50,20 +55,20 @@ output "dnsRecordReturnPathType" {
 }
 
 output "dnsRecordReturnPathValue" {
-  value = postmark_domain.domain.return_path_domain_cname_value
+  value = nonsensitive(postmark_domain.domain.return_path_domain_cname_value)
 }
 
 output "dnsRecordsPostmark" {
   value = jsonencode([
     {
-      name  = postmark_domain.domain.dkim_pending_host
+      name  = nonsensitive(postmark_domain.domain.dkim_pending_host)
       type  = "TXT"
-      value = postmark_domain.domain.dkim_pending_text_value
+      value = nonsensitive(postmark_domain.domain.dkim_pending_text_value)
     },
     {
-      name  = postmark_domain.domain.return_path_domain
+      name  = nonsensitive(postmark_domain.domain.return_path_domain)
       type  = "CNAME"
-      value = postmark_domain.domain.return_path_domain_cname_value
+      value = nonsensitive(postmark_domain.domain.return_path_domain_cname_value)
     }
   ])
 }
