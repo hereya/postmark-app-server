@@ -36,6 +36,17 @@ resource "postmark_server" "server" {
   delivery_type = var.deliveryType
 }
 
+# Tracks the domain name a level above the postmark_domain resource. When
+# var.domain changes, this resource's `input` changes, which triggers a
+# REPLACE (destroy + create) on postmark_domain.domain via the
+# replace_triggered_by lifecycle below — bypassing the provider's broken
+# in-place Update that silently returns success without actually renaming
+# the domain in the Postmark account.
+resource "terraform_data" "domain_marker" {
+  count = var.provisionDomain ? 1 : 0
+  input = var.domain
+}
+
 resource "postmark_domain" "domain" {
   # Conditional: only the FIRST workspace per Postmark account creates this.
   # Subsequent workspaces sharing the same account set provisionDomain=false
@@ -45,6 +56,16 @@ resource "postmark_domain" "domain" {
   count = var.provisionDomain ? 1 : 0
 
   name = var.domain
+
+  lifecycle {
+    # shebang-labs/postmark v0.2.4's Update operation for postmark_domain
+    # is a no-op at the API level: Tofu sees the diff as in-place
+    # ("name: brainumber.app -> dev.brainumber.app"), the provider claims
+    # success, but the Postmark account is never actually rebranded.
+    # Force a destroy-then-create when var.domain changes, which uses the
+    # provider's Delete + Create paths (both of which DO work correctly).
+    replace_triggered_by = [terraform_data.domain_marker]
+  }
 }
 
 resource "aws_ssm_parameter" "postmark_server_key" {
