@@ -175,6 +175,58 @@ resource "aws_route53_record" "postmark_return_path" {
   ]
 }
 
+# ---------------------------------------------------------------------------
+# Trigger Postmark's domain verification immediately after the Route 53
+# records are created. Without this, Postmark's own poll cycle takes ~5
+# minutes to discover the records. The verifyDkim and verifyReturnPath
+# endpoints force an immediate authoritative DNS lookup on Postmark's side.
+#
+# Only runs in auto-Route53 mode — in external-DNS mode the user controls
+# when their records become live, so triggering verification eagerly would
+# just produce "DNS not found" responses.
+#
+# The replace_triggers ensure the check re-runs if either record's content
+# changes or the postmark_domain id changes. Failures are non-fatal — if
+# Postmark says "not yet propagated" the next poll cycle catches up.
+# ---------------------------------------------------------------------------
+resource "terraform_data" "trigger_postmark_verification" {
+  count = local.manage_dns_in_route53 && var.provisionDomain ? 1 : 0
+
+  triggers_replace = [
+    aws_route53_record.postmark_dkim[0].id,
+    aws_route53_record.postmark_return_path[0].id,
+    postmark_domain.domain[0].id,
+  ]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    # Token + domain id passed via env so they don't leak into the rendered
+    # command (ps listing etc.).
+    environment = {
+      POSTMARK_TOKEN = var.postmarkAccountToken
+      DOMAIN_ID      = postmark_domain.domain[0].id
+    }
+    command = <<-EOT
+      set -u
+      # Brief wait for Route 53's authoritative servers to serve the new
+      # records before pinging Postmark — usually a few seconds, 20s is a
+      # safe upper bound.
+      sleep 20
+      for endpoint in verifyDkim verifyReturnPath; do
+        echo "[postmark] Triggering $endpoint for domain $DOMAIN_ID..."
+        curl -fsS -X PUT \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "X-Postmark-Account-Token: $POSTMARK_TOKEN" \
+          "https://api.postmarkapp.com/domains/$DOMAIN_ID/$endpoint" \
+          | head -c 300 \
+          || echo "  (non-fatal: Postmark will auto-verify on its own poll cycle)"
+        echo
+      done
+    EOT
+  }
+}
+
 resource "aws_ssm_parameter" "postmark_server_key" {
   name        = "/postmark_app_server/${random_pet.server_suffix.id}/server_key"
   description = "Postmark server API key for ${postmark_server.server.name}"
