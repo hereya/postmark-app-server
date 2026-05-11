@@ -37,18 +37,34 @@ locals {
   _rp_host_raw    = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain), "")
   _rp_value_raw   = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain_cname_value), "")
 
-  # shebang-labs/postmark returns `dkim_pending_host` as a full FQDN
-  # but `return_path_domain` as just the relative prefix (e.g.
-  # "pm-bounces"). Normalize the return-path to an FQDN so both DNS
-  # records can be copied straight into a DNS provider's UI without
-  # the user having to remember which is relative-vs-absolute.
+  # shebang-labs/postmark's `return_path_domain` is unreliable: sometimes
+  # it returns the relative prefix ("pm-bounces"), sometimes it returns
+  # empty. The CNAME target (`return_path_domain_cname_value`) more
+  # consistently returns "pm.mtasv.net". Since Postmark's DEFAULT
+  # return-path setup is always `pm-bounces.<domain>` -> pm.mtasv.net,
+  # we synthesize the FQDN ourselves when the provider hands us an empty
+  # or relative value, and fall back to the well-known CNAME target if
+  # that's empty too. Result: dnsRecordReturnPathHost / Value are always
+  # paste-into-DNS ready for any user.
+  #
+  # The DKIM host always comes through fully-qualified, so it just passes
+  # through.
   dkim_host  = local._dkim_host_raw
   dkim_value = local._dkim_value_raw
-  rp_value   = local._rp_value_raw
-  rp_host = local._rp_host_raw == "" ? "" : (
-    endswith(local._rp_host_raw, var.domain)
-      ? local._rp_host_raw
-      : "${local._rp_host_raw}.${var.domain}"
+
+  rp_host = (
+    local._rp_host_raw == ""
+      ? (var.provisionDomain ? "pm-bounces.${var.domain}" : "")
+      : (
+        endswith(local._rp_host_raw, var.domain)
+          ? local._rp_host_raw
+          : "${local._rp_host_raw}.${var.domain}"
+      )
+  )
+  rp_value = (
+    local._rp_value_raw == ""
+      ? (var.provisionDomain ? "pm.mtasv.net" : "")
+      : local._rp_value_raw
   )
 }
 
