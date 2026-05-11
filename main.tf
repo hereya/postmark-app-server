@@ -106,16 +106,30 @@ resource "postmark_server" "server" {
 }
 
 resource "postmark_domain" "domain" {
-  # Keyed on effective_domain so a domain change rewrites the address in
-  # state (forcing destroy+create rather than the provider's broken
-  # in-place Update). See README.
-  #
   # provisionDomain=false skips the resource entirely — for workspaces
   # sharing one Postmark account where the domain has already been
   # registered by another workspace.
-  for_each = var.provisionDomain ? toset([local.effective_domain]) : toset([])
+  count = var.provisionDomain ? 1 : 0
+  name  = local.effective_domain
 
-  name = each.key
+  # The shebang-labs/postmark provider's Update for `name` is a silent
+  # no-op (see README); forcing replacement via terraform_data trigger
+  # below is how we recover correct destroy+create semantics. We can't
+  # use `for_each = toset([local.effective_domain])` because that local
+  # is known-only-after-apply when the subdomain is auto-generated
+  # (random_pet) — Terraform requires for_each keys to be statically
+  # known at plan time.
+  lifecycle {
+    replace_triggered_by = [terraform_data.domain_trigger]
+  }
+}
+
+# Stable replacement trigger for postmark_domain.domain. terraform_data is
+# the built-in null-replacement: changing any value in `triggers_replace`
+# causes terraform_data to be replaced, which in turn forces replacement
+# of any resource that references it via `replace_triggered_by`.
+resource "terraform_data" "domain_trigger" {
+  triggers_replace = [local.effective_domain]
 }
 
 # ---------------------------------------------------------------------------
@@ -134,25 +148,17 @@ resource "postmark_domain" "domain" {
 # ---------------------------------------------------------------------------
 
 resource "aws_route53_record" "postmark_dkim" {
-  for_each = (
-    local.manage_dns_in_route53 && var.provisionDomain
-      ? toset([local.effective_domain])
-      : toset([])
-  )
+  count = local.manage_dns_in_route53 && var.provisionDomain ? 1 : 0
 
   zone_id = data.aws_route53_zone.root[0].zone_id
-  name    = nonsensitive(postmark_domain.domain[each.key].dkim_pending_host)
+  name    = nonsensitive(postmark_domain.domain[0].dkim_pending_host)
   type    = "TXT"
   ttl     = 300
-  records = [nonsensitive(postmark_domain.domain[each.key].dkim_pending_text_value)]
+  records = [nonsensitive(postmark_domain.domain[0].dkim_pending_text_value)]
 }
 
 resource "aws_route53_record" "postmark_return_path" {
-  for_each = (
-    local.manage_dns_in_route53 && var.provisionDomain
-      ? toset([local.effective_domain])
-      : toset([])
-  )
+  count = local.manage_dns_in_route53 && var.provisionDomain ? 1 : 0
 
   zone_id = data.aws_route53_zone.root[0].zone_id
   name    = "pm-bounces.${local.effective_domain}"
@@ -161,7 +167,7 @@ resource "aws_route53_record" "postmark_return_path" {
   records = [
     coalesce(
       try(
-        nonsensitive(postmark_domain.domain[each.key].return_path_domain_cname_value),
+        nonsensitive(postmark_domain.domain[0].return_path_domain_cname_value),
         null,
       ),
       "pm.mtasv.net",

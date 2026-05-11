@@ -40,10 +40,10 @@ output "effectiveSubdomain" {
 #     Postmark's well-known "pm.mtasv.net".
 
 locals {
-  _dkim_host_raw  = try(nonsensitive(postmark_domain.domain[local.effective_domain].dkim_pending_host), "")
-  _dkim_value_raw = try(nonsensitive(postmark_domain.domain[local.effective_domain].dkim_pending_text_value), "")
-  _rp_host_raw    = try(nonsensitive(postmark_domain.domain[local.effective_domain].return_path_domain), "")
-  _rp_value_raw   = try(nonsensitive(postmark_domain.domain[local.effective_domain].return_path_domain_cname_value), "")
+  _dkim_host_raw  = try(nonsensitive(postmark_domain.domain[0].dkim_pending_host), "")
+  _dkim_value_raw = try(nonsensitive(postmark_domain.domain[0].dkim_pending_text_value), "")
+  _rp_host_raw    = try(nonsensitive(postmark_domain.domain[0].return_path_domain), "")
+  _rp_value_raw   = try(nonsensitive(postmark_domain.domain[0].return_path_domain_cname_value), "")
 
   dkim_host  = local._dkim_host_raw
   dkim_value = local._dkim_value_raw
