@@ -27,10 +27,15 @@ output "postmarkFromEmail" {
 # from the first workspace's apply.
 
 locals {
-  dkim_host  = try(nonsensitive(postmark_domain.domain[0].dkim_pending_host), "")
-  dkim_value = try(nonsensitive(postmark_domain.domain[0].dkim_pending_text_value), "")
-  rp_host    = try(nonsensitive(postmark_domain.domain[0].return_path_domain), "")
-  rp_value   = try(nonsensitive(postmark_domain.domain[0].return_path_domain_cname_value), "")
+  # postmark_domain.domain is now `for_each`-keyed on var.domain (so a
+  # domain change forces an address change → destroy+create instead of
+  # the broken in-place Update). The collection's only element is at
+  # key var.domain; if provisionDomain=false the map is empty and try()
+  # returns the empty-string fallback.
+  dkim_host  = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_host), "")
+  dkim_value = try(nonsensitive(postmark_domain.domain[var.domain].dkim_pending_text_value), "")
+  rp_host    = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain), "")
+  rp_value   = try(nonsensitive(postmark_domain.domain[var.domain].return_path_domain_cname_value), "")
 }
 
 output "dnsRecordDkimHost" {

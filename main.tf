@@ -36,36 +36,20 @@ resource "postmark_server" "server" {
   delivery_type = var.deliveryType
 }
 
-# Tracks the domain name a level above the postmark_domain resource. When
-# var.domain changes, this resource's `input` changes, which triggers a
-# REPLACE (destroy + create) on postmark_domain.domain via the
-# replace_triggered_by lifecycle below — bypassing the provider's broken
-# in-place Update that silently returns success without actually renaming
-# the domain in the Postmark account.
-resource "terraform_data" "domain_marker" {
-  count = var.provisionDomain ? 1 : 0
-  input = var.domain
-}
-
 resource "postmark_domain" "domain" {
-  # Conditional: only the FIRST workspace per Postmark account creates this.
-  # Subsequent workspaces sharing the same account set provisionDomain=false
-  # because Postmark domains are account-scoped (one per account, total),
-  # not workspace-scoped — trying to "create" an already-existing one
-  # triggers an inconsistent-state error in shebang-labs/postmark v0.2.4.
-  count = var.provisionDomain ? 1 : 0
+  # Keyed on var.domain (rather than `count`) so a change to var.domain
+  # changes the resource's ADDRESS in state — old key is dropped, new
+  # key is added. Tofu's only path through this is destroy+create, which
+  # uses the provider's Delete + Create methods (both of which actually
+  # talk to the Postmark API). shebang-labs/postmark v0.2.4's Update is
+  # a silent no-op — we route around it entirely.
+  #
+  # Conditional: only the FIRST workspace per Postmark account creates
+  # this. Subsequent workspaces sharing the same account set
+  # provisionDomain=false because Postmark domains are account-scoped.
+  for_each = var.provisionDomain ? toset([var.domain]) : toset([])
 
-  name = var.domain
-
-  lifecycle {
-    # shebang-labs/postmark v0.2.4's Update operation for postmark_domain
-    # is a no-op at the API level: Tofu sees the diff as in-place
-    # ("name: brainumber.app -> dev.brainumber.app"), the provider claims
-    # success, but the Postmark account is never actually rebranded.
-    # Force a destroy-then-create when var.domain changes, which uses the
-    # provider's Delete + Create paths (both of which DO work correctly).
-    replace_triggered_by = [terraform_data.domain_marker]
-  }
+  name = each.key
 }
 
 resource "aws_ssm_parameter" "postmark_server_key" {
