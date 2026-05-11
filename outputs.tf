@@ -1,30 +1,16 @@
-output "postmarkServerTokenArn" {
+# Postmark server API token. We output the SSM SecureString ARN; hereya
+# auto-resolves SSM SecureString ARNs and substitutes the decrypted value
+# into the consumer's env, so by the time downstream code reads
+# `postmarkServerToken` it holds the actual token (not an ARN). Consumers
+# therefore do NOT need any ssm:GetParameter / kms:Decrypt IAM permission
+# — hereya itself handles the SSM read on the dev/deploy side using its
+# own role.
+output "postmarkServerToken" {
   value = aws_ssm_parameter.postmark_server_key.arn
 }
 
 output "postmarkFromEmail" {
   value = local.resolved_from_email
-}
-
-output "iamPolicyPostmark" {
-  value = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect   = "Allow"
-        Action   = ["ssm:GetParameter"]
-        Resource = aws_ssm_parameter.postmark_server_key.arn
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["kms:Decrypt"]
-        Resource = "*"
-        Condition = {
-          StringEquals = { "kms:ViaService" = "ssm.${data.aws_region.current.name}.amazonaws.com" }
-        }
-      }
-    ]
-  })
 }
 
 # --- DNS records (all dnsRecord* prefixed -- user-actionable) ---
