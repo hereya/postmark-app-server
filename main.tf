@@ -242,6 +242,54 @@ resource "terraform_data" "trigger_postmark_verification" {
   }
 }
 
+# ---------------------------------------------------------------------------
+# Mode B (external DNS) variant of the verification trigger.
+#
+# Mode A above keys triggers_replace off the Route 53 record IDs — there's no
+# equivalent state to watch in Mode B because the user owns the records, so
+# we have no signal for "records just became live, re-verify now." Fall back
+# to firing on every apply via plantimestamp(): plan-time noise is acceptable
+# since the verify endpoints are idempotent (Postmark returns "already
+# verified" once done, "DNS not found" if the user hasn't added records yet
+# — both non-fatal). The user's natural cadence of "add DNS records → re-run
+# hereya deploy" picks up verification on the second deploy with zero extra
+# work.
+#
+# Skip the 20s sleep that the Mode A variant uses: Mode A needs it for Route
+# 53's authoritative servers to serve the records the package JUST wrote,
+# whereas in Mode B the user added them externally beforehand and they've
+# already had a propagation window.
+# ---------------------------------------------------------------------------
+resource "terraform_data" "trigger_postmark_verification_external" {
+  count = !local.manage_dns_in_route53 && var.provisionDomain ? 1 : 0
+
+  triggers_replace = [plantimestamp()]
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      POSTMARK_TOKEN = var.postmarkAccountToken
+      DOMAIN_ID      = postmark_domain.domain[0].id
+    }
+    command = <<-EOT
+      set -u
+      for endpoint in verifyDkim verifyReturnPath; do
+        echo "[postmark] Triggering $endpoint for domain $DOMAIN_ID (mode B)..."
+        curl -fsS -X PUT \
+          -H "Accept: application/json" \
+          -H "Content-Type: application/json" \
+          -H "X-Postmark-Account-Token: $POSTMARK_TOKEN" \
+          "https://api.postmarkapp.com/domains/$DOMAIN_ID/$endpoint" \
+          | head -c 300 \
+          || echo "  (non-fatal: DNS records may not be live yet — Postmark will auto-verify on its own poll cycle, or re-run hereya deploy after the user adds them)"
+        echo
+      done
+    EOT
+  }
+
+  depends_on = [postmark_domain.domain]
+}
+
 resource "aws_ssm_parameter" "postmark_server_key" {
   name        = "/postmark_app_server/${random_pet.server_suffix.id}/server_key"
   description = "Postmark server API key for ${postmark_server.server.name}"
